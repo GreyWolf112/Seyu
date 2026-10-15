@@ -1,0 +1,29 @@
+{
+  "rain": {
+    "source": "rain",
+    "offsetSeconds": 15,
+    "durationSeconds": 60,
+    "sourceDecodedSha256": "73400b6fbbc7c6be4c5ad36ac87fae0f645b567f7328e5846ddb60927e22a8e7",
+    "outputSha256": "f8b8e528ece81a75b78a730bf47819e944ac7540a429915074326400aac2eacb",
+    "peak": 0.8,
+    "rms": 0.02894
+  },
+  "ocean": {
+    "source": "rocks",
+    "offsetSeconds": 5,
+    "durationSeconds": 60,
+    "sourceDecodedSha256": "9c3bc859288f7ae6ef9d54eb9f3843a5162dc90dbda19eb2155a5befdd0f1a12",
+    "outputSha256": "c638dedb03fd8e26d9da17c1e59af5a994cf2fea831e399693e71819f5291bad",
+    "peak": 0.8,
+    "rms": 0.06733
+  },
+  "forest": {
+    "source": "forest",
+    "offsetSeconds": 5,
+    "durationSeconds": 60,
+    "sourceDecodedSha256": "a69bae37d5b8530e3d7fa0cfca76270db6295404ce5894e6ee8e92b9696b8399",
+    "outputSha256": "9312fac9b66d1d098e2e4233eaf6a31d6be6ddf8666f039d541c72d84253d047",
+    "peak": 0.8,
+    "rms": 0.04293
+  }
+}

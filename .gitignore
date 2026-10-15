@@ -10,3 +10,5 @@
 /.clang-tidy
 **/.test
 /.appanalyzer
+# Local source snapshots may include machine-specific signing configuration.
+/.local-baselines/
