@@ -15,9 +15,9 @@
         "name": "EntryAbility",
         "srcEntry": "./ets/entryability/EntryAbility.ets",
         "description": "$string:EntryAbility_desc",
-        "icon": "$media:xuyu_icon",
+        "icon": "$media:xuyudao_icon",
         "label": "$string:EntryAbility_label",
-        "startWindowIcon": "$media:xuyu_icon",
+        "startWindowIcon": "$media:xuyudao_icon",
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
         "skills": [

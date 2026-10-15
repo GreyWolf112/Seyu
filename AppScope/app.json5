@@ -1,11 +1,11 @@
 {
   "app": {
-    "bundleName": "com.example.myapplication",
+    "bundleName": "com.example.xuyu",
     "vendor": "example",
     "versionCode": 1000000,
     "versionName": "1.0.0",
     "buildVersion": "1",
-    "icon": "$media:xuyu_icon",
+    "icon": "$media:xuyudao_icon",
     "label": "$string:app_name"
   }
 }
