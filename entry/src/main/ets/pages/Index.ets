@@ -1,29 +1,54 @@
+import { DataManager } from '../components/DataManager';
+import { DataMaintenance } from '../storage/DataMaintenance';
+import { BackupFiles } from '../storage/BackupFiles';
+import { LocalBackup } from '../storage/BackupCodec';
+import { AmbientPanel } from '../components/AmbientPanel';
+import { SleepFlow } from '../components/SleepFlow';
+import { BreathingClock } from '../models/Relaxation';
+import { newJoy, templateRecord } from '../models/WritingTemplates';
+import { newReflection, reflectionScene } from '../models/ReflectionModel';
+import { ReflectionFlow } from '../components/ReflectionFlow';
+import { EmotionRecord } from '../models/Record';
+import { newJournal } from '../models/EditorModel';
+import { DraftRepository } from '../storage/DraftRepository';
+import { PhotoStore } from '../storage/PhotoStore';
+import { RecordEditor } from '../components/RecordEditor';
+import { RecordRepository } from '../storage/RecordRepository';
+import { PreferencesRecordStore } from '../storage/PreferencesRecordStore';
 import { preferences } from '@kit.ArkData';
-
-interface JournalEntry {
-  id: string;
-  date: string;
-  mood: string;
-  text: string;
-}
-interface Bottle { id: string; date: string; mood: string; text: string; }
-interface Joy { id: string; date: string; title: string; }
-interface DayItem {
-  key: string;
-  day: number;
-  label: string;
-}
-
-const INK: string = '#493E3D';
-const MUTED: string = '#776B65';
-const ROSE: string = '#986067';
-const PAPER: string = '#FCF9F5';
-const MOODS: string[] = ['平静', '开心', '疲惫', '委屈', '烦躁'];
-const FACES: string[] = ['◡', '⌣', '－', '︵', '﹏'];
+import { Joy } from '../models/LegacyModels';
+import { INK, MUTED, ROSE, PAPER } from '../theme/Theme';
+import { icon, mainButton } from '../components/Common';
+import { HomePage } from './HomePage';
+import { CompanionPage } from './CompanionPage';
+import { SoothePage } from './SoothePage';
+import { JournalPage } from './JournalPage';
 
 @Entry
 @Component
 struct Index {
+  @State storageInitializing: boolean = false;
+  @State dataOpen: boolean = false;
+  @State dataBusy: boolean = false;
+  @State maintenanceBlocked: boolean = false;
+  @State dataMessage: string = '';
+  @State backupPreview: string = '';
+  private pendingBackup: LocalBackup | undefined = undefined;
+  private dataMaintenance: DataMaintenance | undefined = undefined;
+  private backupFiles: BackupFiles | undefined = undefined;
+  @StorageLink('zhiyuForeground') @Watch('foregroundChanged') foreground: boolean = true;
+  @State sleepOpen: boolean = false;
+  @State breathingDuration: number = 60;
+  private breathingClock: BreathingClock = new BreathingClock();
+  private foregroundChanged(): void { if (!this.foreground) this.stopTimer(); }
+  @State savedRecordId: string = '';
+  @State bottlePlaced: boolean = false;
+  @State markingBottle: boolean = false;
+  @State favoriteBusy: boolean = false;
+  @State reflectionOpen: boolean = false;
+  @State reflectionPending: boolean = false;
+  @State reflectionSeed: EmotionRecord = newReflection('words');
+  private reflectionDrafts: DraftRepository | undefined = undefined;
   @State tab: number = 0;
   @State sanctuary: boolean = false;
   @State night: boolean = false;
@@ -32,25 +57,13 @@ struct Index {
   @State search: string = '';
   @State monthOffset: number = 0;
   @State mood: string = '';
-  @State mode: number = 0;
-  @State draft: string = '';
-  @State bottles: Bottle[] = [];
   @State joys: Joy[] = [];
-  @State bottleMood: string = '平静';
-  @State floating: boolean = false;
-  @State savingBottle: boolean = false;
+  @State presetJoys: Joy[] = [];
   @State savingJoy: boolean = false;
-  @State showBottles: boolean = false;
-  @State warmth: number = -1;
-  private floatTimer: number = -1;
-  private warmCards: string[] = ['你可以在照顾别人之前，先问问自己累不累。', '拒绝一件让你为难的事，也是在认真照顾自己的生活。', '今天没有特别的收获，也不妨碍你值得休息。', '你的感受不需要获得所有人的同意，才可以存在。'];
   @State filter: number = 0;
-  @State entries: JournalEntry[] = [];
+  @State entries: EmotionRecord[] = [];
   @State selectedDate: string = '';
   @State editor: boolean = false;
-  @State note: string = '';
-  @State noteMood: string = '平静';
-  @State editingId: string = '';
   @State exercise: number = -1;
   @State seconds: number = 60;
   @State running: boolean = false;
@@ -58,57 +71,193 @@ struct Index {
   @State notice: string = '';
   private timer: number = -1;
   private noticeTimer: number = -1;
-  private storage: preferences.Preferences | undefined = undefined;
-  private modes: string[] = ['先听我说', '陪我梳理', '想个小办法'];
-  private tabs: string[] = ['首页', '陪伴', '舒缓', '心情手记'];
+  private repository: RecordRepository | undefined = undefined;
+  @State storageReady: boolean = false;
+  @State quickSaving: boolean = false;
+  @State editorSeed: EmotionRecord = newJournal();
+  @State filesDir: string = '';
+  private drafts: DraftRepository | undefined = undefined;
+  private media: PhotoStore | undefined = undefined;
+  private tabs: string[] = ['此刻', '心事', '放松', '我的记录'];
   private icons: Resource[] = [$r('app.media.ic_home'), $r('app.media.ic_chat'), $r('app.media.ic_leaf'), $r('app.media.ic_book')];
 
   private dateKey(date: Date): string {
     return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
   }
 
-  private calendarTitle(): string {
-    const date: Date = new Date(new Date().getFullYear(), new Date().getMonth() + this.monthOffset, 1);
-    return `${date.getFullYear()} 年 ${date.getMonth() + 1} 月`;
-  }
-
-  private monthRows(): DayItem[][] {
-    const first: Date = new Date(new Date().getFullYear(), new Date().getMonth() + this.monthOffset, 1);
-    const count: number = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
-    const rows: DayItem[][] = [];
-    for (let week: number = 0; week < Math.ceil((first.getDay() + count) / 7); week++) {
-      const row: DayItem[] = [];
-      for (let day: number = 0; day < 7; day++) {
-        const number: number = week * 7 + day - first.getDay() + 1;
-        row.push({ key: number > 0 && number <= count ? this.dateKey(new Date(first.getFullYear(), first.getMonth(), number)) : '', day: number > 0 && number <= count ? number : 0, label: '' });
-      }
-      rows.push(row);
-    }
-    return rows;
-  }
-
-  private visibleEntries(): JournalEntry[] {
-    return this.entries.filter((item: JournalEntry) => (this.selectedDate === '' || item.date === this.selectedDate) && (!this.search.trim() || item.text.includes(this.search.trim()) || item.mood.includes(this.search.trim())));
-  }
-
   aboutToAppear(): void {
     this.selectedDate = this.dateKey(new Date());
+    this.initializeStorage();
+  }
+
+  private async initializeStorage(): Promise<void> {
+    this.storageInitializing = true;
+    this.storageReady = false;
     try {
       const context = this.getUIContext().getHostContext();
-      if (context) {
-        this.storage = preferences.getPreferencesSync(context, { name: 'zhiyu_journal' });
-        const saved: string = this.storage.getSync('entries', '[]') as string;
-        this.entries = JSON.parse(saved) as JournalEntry[];
-        this.bottles = JSON.parse(this.storage.getSync('bottles', '[]') as string) as Bottle[];
-        this.joys = JSON.parse(this.storage.getSync('joys', '[]') as string) as Joy[];
-      }
+      if (!context) throw new Error('Missing context');
+      const store = new PreferencesRecordStore(preferences.getPreferencesSync(context, { name: 'zhiyu_journal' }));
+      const journalStore = new PreferencesRecordStore(preferences.getPreferencesSync(context, { name: 'zhiyu_editor_drafts' }));
+      const reflectionStore = new PreferencesRecordStore(preferences.getPreferencesSync(context, { name: 'zhiyu_reflection_drafts' }));
+      this.backupFiles = new BackupFiles(context);
+      this.dataMaintenance = new DataMaintenance(store, journalStore, reflectionStore, this.backupFiles);
+      // Finish a durable import/delete before loading records or deleting unused photos.
+      await this.dataMaintenance.recover();
+      this.maintenanceBlocked = false;
+      const repository = new RecordRepository(store);
+      this.repository = repository;
+      await repository.initialize();
+      this.filesDir = context.filesDir;
+      this.media = new PhotoStore(context.filesDir);
+      this.drafts = new DraftRepository(journalStore);
+      this.reflectionDrafts = new DraftRepository(reflectionStore);
+      this.refreshReflectionPending();
+      this.refreshRecords();
+      // A corrupt draft or recovery copy disables cleanup, never destroys its potential photos.
+      try {
+        const references = repository.photoReferences();
+        const reflectionDraft = this.reflectionDrafts.load();
+        reflectionDraft?.photos.forEach((photo) => { references.push(photo.relativePath); });
+        const draft = this.drafts.load();
+        draft?.photos.forEach((photo) => { references.push(photo.relativePath); });
+        await this.media.collectUnused(references);
+      } catch (_) {}
+      this.storageReady = true;
     } catch (_) {
-      this.flash('暂时无法读取本地手记，请稍后重试');
+      this.maintenanceBlocked = this.hasPendingMaintenance();
+      if (this.maintenanceBlocked) {
+        this.dataOpen = true;
+        this.dataMessage = '上次数据操作尚未完成，请重试；完成前暂不开放记录编辑。';
+      } else this.flash('记录暂不可用，请重新打开应用重试。');
+    } finally { this.storageInitializing = false; }
+  }
+
+  private hasPendingMaintenance(): boolean {
+    try { return this.dataMaintenance?.isPending() || false; }
+    catch (_) { return true; }
+  }
+
+  private openDataManager(): void {
+    if (this.storageInitializing || this.quickSaving || this.savingJoy || this.favoriteBusy || this.markingBottle) {
+      this.flash('请等当前保存完成后再打开数据管理'); return;
     }
+    this.dataMessage = ''; this.clearBackupPreview(); this.dataOpen = true;
+  }
+
+  private clearBackupPreview(): void { this.pendingBackup = undefined; this.backupPreview = ''; }
+
+  private async exportBackup(): Promise<void> {
+    if (this.dataBusy || !this.storageReady || !this.dataMaintenance || !this.backupFiles) return;
+    this.dataBusy = true; this.dataMessage = '正在整理记录、草稿和照片…';
+    try {
+      const raw = await this.dataMaintenance.createBackup();
+      this.dataMessage = await this.backupFiles.save(raw) ? '备份已导出到你选择的位置，请妥善保管。' : '已取消导出，没有生成备份。';
+    } catch (_) { this.dataMessage = '备份未完成。请检查照片是否可读、存储空间及64MB大小限制；若目标位置留下不完整文件，请删除后重试。'; }
+    finally { this.dataBusy = false; }
+  }
+
+  private async chooseBackup(): Promise<void> {
+    if (this.dataBusy || !this.storageReady || !this.dataMaintenance || !this.backupFiles) return;
+    this.dataBusy = true; this.clearBackupPreview(); this.dataMessage = '请选择备份，随后会校验内容和照片…';
+    try {
+      const raw = await this.backupFiles.select();
+      if (raw === null) { this.dataMessage = '已取消选择，本机数据没有改变。'; return; }
+      const backup = await this.dataMaintenance.inspect(raw);
+      const summary = this.dataMaintenance.summarize(backup);
+      this.pendingBackup = backup;
+      this.backupPreview = `备份时间：${new Date(backup.createdAt).toLocaleString()}\n包含 ${backup.document.records.length} 条记录、${backup.photos.length} 张照片\n将新增 ${summary.added} 条记录；${summary.kept} 条同编号记录保留本机版本\n将恢复 ${summary.draftsAdded} 份草稿；${summary.draftsKept} 份已有草稿保留本机版本`;
+      this.dataMessage = '校验通过，确认后才会写入本机。';
+    } catch (_) { this.dataMessage = '文件未通过校验，或无法读取。请选择64MB以内的知屿备份；本机数据没有改变。'; }
+    finally { this.dataBusy = false; }
+  }
+
+  private confirmRestore(): void {
+    if (this.dataBusy || !this.pendingBackup) return;
+    this.getUIContext().showAlertDialog({ title: '合并这份备份？',
+      message: '新增备份里的记录；同编号记录和已有草稿保留本机版本。合并期间请等待完成。',
+      primaryButton: { value: '先不恢复', action: () => {} },
+      secondaryButton: { value: '确认合并', action: () => { this.restoreBackup(); } } });
+  }
+
+  private async restoreBackup(): Promise<void> {
+    if (this.dataBusy || !this.storageReady || !this.pendingBackup || !this.dataMaintenance) return;
+    this.dataBusy = true; this.storageReady = false; this.dataMessage = '正在导入照片并合并记录…';
+    try {
+      await this.dataMaintenance.restore(this.pendingBackup);
+      await this.reloadAfterMaintenance();
+      this.clearBackupPreview(); this.dataMessage = '备份已合并，记录和可恢复的草稿已保存到本机。';
+    } catch (_) { await this.maintenanceFailed(); }
+    finally { this.dataBusy = false; }
+  }
+
+  private confirmErase(): void {
+    if (this.dataBusy || this.maintenanceBlocked) return;
+    this.getUIContext().showAlertDialog({ title: '确定删除本机全部数据？',
+      message: '记录、草稿、应用内照片及旧版和内部恢复副本都会删除，无法撤销。已导出的备份和相册原图不会删除。',
+      primaryButton: { value: '保留数据', action: () => {} },
+      secondaryButton: { value: '确认全部删除', action: () => { this.eraseData(); } } });
+  }
+
+  private async eraseData(): Promise<void> {
+    if (this.dataBusy || !this.dataMaintenance) return;
+    this.clearBackupPreview();
+    this.dataBusy = true; this.storageReady = false; this.dataMessage = '正在删除本机数据与应用内照片…';
+    try {
+      await this.dataMaintenance.erase();
+      this.clearRecordViews();
+      await this.reloadAfterMaintenance();
+      this.clearBackupPreview(); this.editorSeed = newJournal(); this.reflectionSeed = newReflection('words');
+      this.mood = ''; this.savedRecordId = ''; this.search = ''; this.selectedDate = '';
+      this.dataMessage = '本机记录、草稿、应用内照片及内部副本已删除。你导出的备份仍由你自行保管。';
+    } catch (_) { await this.maintenanceFailed(); }
+    finally { this.dataBusy = false; }
+  }
+
+  private clearRecordViews(): void {
+    this.entries = []; this.joys = []; this.presetJoys = []; this.reflectionPending = false;
+    this.editorSeed = newJournal(); this.reflectionSeed = newReflection('words');
+    this.mood = ''; this.savedRecordId = ''; this.search = ''; this.selectedDate = '';
+  }
+
+  private async reloadAfterMaintenance(): Promise<void> {
+    // Recreate adapters as well, including when startup previously stopped during recovery.
+    await this.initializeStorage();
+    if (!this.storageReady) throw new Error('Reload failed');
+    this.maintenanceBlocked = false;
+  }
+
+  private async maintenanceFailed(): Promise<void> {
+    this.maintenanceBlocked = this.hasPendingMaintenance();
+    if (this.maintenanceBlocked) {
+      this.storageReady = false;
+      this.dataMessage = '操作尚未完成，暂不开放编辑。请点“重试完成上次操作”；重新打开应用也会继续完成。';
+    } else {
+      await this.initializeStorage();
+      this.dataMessage = this.storageReady ? '操作未能确认完成，已重新载入本机现有记录。请核对后重试。' : '操作未完成，请重新打开应用检查后重试。';
+    }
+  }
+
+  private async retryMaintenance(): Promise<void> {
+    if (this.dataBusy || !this.dataMaintenance) return;
+    this.dataBusy = true; this.dataMessage = '正在继续完成上次数据操作…';
+    try {
+      await this.dataMaintenance.recover();
+      this.clearRecordViews();
+      await this.reloadAfterMaintenance(); this.clearBackupPreview();
+      this.editorSeed = newJournal(); this.reflectionSeed = newReflection('words');
+      this.dataMessage = '上次数据操作已完成，可以继续使用。';
+    } catch (_) { await this.maintenanceFailed(); }
+    finally { this.dataBusy = false; }
+  }
+
+  private refreshRecords(): void {
+    if (!this.repository) return;
+    this.entries = this.repository.timeline();
+    this.joys = this.repository.joys();
+    this.presetJoys = this.repository.presetJoys();
   }
 
   aboutToDisappear(): void {
-    if (this.floatTimer !== -1) clearTimeout(this.floatTimer);
     this.stopTimer();
     if (this.noticeTimer !== -1) clearTimeout(this.noticeTimer);
   }
@@ -119,32 +268,166 @@ struct Index {
     this.noticeTimer = setTimeout(() => { this.notice = ''; }, 2800);
   }
 
-  private openEditor(text: string = ''): void {
-    this.editingId = '';
-    this.note = text;
-    this.noteMood = this.mood || '平静';
-    this.editor = true;
+  private refreshReflectionPending(): void {
+    try { this.reflectionPending = this.reflectionDrafts?.load() !== undefined; }
+    catch (_) { this.reflectionPending = true; }
   }
 
-  private async saveNote(): Promise<void> {
-    if (!this.note.trim()) { this.flash('写下一点此刻的感受吧'); return; }
-    const record: JournalEntry = {
-      id: this.editingId || Date.now().toString(),
-      date: this.editingId ? (this.entries.find((item: JournalEntry) => item.id === this.editingId)?.date || this.dateKey(new Date())) : this.dateKey(new Date()),
-      mood: this.noteMood,
-      text: this.note.trim()
-    };
-    const next: JournalEntry[] = [record, ...this.entries.filter((item: JournalEntry) => item.id !== record.id)];
+  private startReflection(id: string): void { this.requestReflection(newReflection(id)); }
+
+  private resumeReflection(): void {
+    if (!this.storageReady) { this.flash('记录尚未准备好'); return; }
     try {
-      if (!this.storage) { this.flash('本地存储暂不可用，文字仍保留在这里'); return; }
-      await this.storage.put('entries', JSON.stringify(next));
-      await this.storage.flush();
-      this.entries = next;
-      this.selectedDate = record.date;
+      const draft = this.reflectionDrafts?.load();
+      if (!draft?.reflection) { this.refreshReflectionPending(); return; }
+      reflectionScene(draft.reflection.sceneId);
+      this.reflectionSeed = draft;
+      this.reflectionOpen = true;
+    } catch (_) { this.flash('整理草稿暂不可用，原内容已保留'); }
+  }
+
+  private requestReflection(seed: EmotionRecord): void {
+    if (!this.storageReady || !this.reflectionDrafts) { this.flash('记录尚未准备好'); return; }
+    try {
+      reflectionScene(seed.reflection?.sceneId || '');
+      const draft = this.reflectionDrafts.load();
+      if (draft) {
+        this.getUIContext().showAlertDialog({ title: '还有一份心事整理未完成', message: '继续原进度，或明确舍弃后打开本次整理。',
+          primaryButton: { value: '继续原进度', action: () => { this.resumeReflection(); } },
+          secondaryButton: { value: '舍弃并打开', action: () => { this.replaceReflection(seed); } } });
+      } else { this.reflectionSeed = seed; this.reflectionOpen = true; }
+    } catch (_) { this.flash('整理内容暂不可用，原数据已保留'); }
+  }
+
+  private async replaceReflection(seed: EmotionRecord): Promise<void> {
+    try {
+      if (!this.reflectionDrafts) throw new Error('No draft store');
+      await this.reflectionDrafts.clear();
+      this.reflectionSeed = seed; this.reflectionOpen = true;
+      this.refreshReflectionPending();
+    } catch (_) { this.flash('草稿未清除，请重试'); }
+  }
+
+  private async saveReflection(record: EmotionRecord): Promise<void> {
+    if (!this.repository || !this.storageReady) throw new Error('No record store');
+    await this.repository.upsert(record);
+    this.refreshRecords(); this.selectedDate = record.date; this.tab = 3;
+    let message: string = '整理卡已保存，随时可以回来修改';
+    try { await this.reflectionDrafts?.clear(); }
+    catch (_) { message = '整理卡已保存，草稿清理未完成；重存不会重复新增'; }
+    this.reflectionOpen = false; this.refreshReflectionPending(); this.flash(message);
+    this.showBottleRitual(record.id);
+  }
+
+  private showBottleRitual(id: string): void {
+    const record = this.entries.find((item: EmotionRecord) => item.id === id);
+    if (!record) return;
+    this.savedRecordId = id;
+    this.bottlePlaced = record.bottled === true || record.kind === 'bottle';
+  }
+
+  private async markBottle(): Promise<void> {
+    if (this.markingBottle || this.bottlePlaced) return;
+    this.markingBottle = true;
+    try {
+      if (!this.repository) throw new Error('No record store');
+      await this.repository.putInBottle(this.savedRecordId);
+      this.refreshRecords(); this.bottlePlaced = true;
+    } catch (_) { this.flash('暂未装进瓶子，原记录仍然保留'); }
+    finally { this.markingBottle = false; }
+  }
+
+  private async toggleFavorite(id: string): Promise<void> {
+    if (this.favoriteBusy || !this.repository) return;
+    const record = this.entries.find((item: EmotionRecord) => item.id === id);
+    if (!record) return;
+    this.favoriteBusy = true;
+    try {
+      await this.repository.setFavorite(id, !record.favorite);
+      this.refreshRecords();
+      this.flash(record.favorite ? '已取消收藏' : '已收藏，可在“收藏”中找回');
+    } catch (_) { this.flash('收藏未更新，请重试'); }
+    finally { this.favoriteBusy = false; }
+  }
+
+  private openEditor(text: string = ''): void {
+    this.requestEditor(newJournal(text, this.mood));
+  }
+
+  private editRecord(id: string): void {
+    const record = this.entries.find((item: EmotionRecord) => item.id === id);
+    if (record?.kind === 'reflection') this.requestReflection(record);
+    else if (record) this.requestEditor(record);
+  }
+
+  private requestEditor(seed: EmotionRecord): void {
+    if (!this.storageReady || !this.drafts) { this.flash('记录尚未准备好，请稍后重试'); return; }
+    try {
+      const draft = this.drafts.load();
+      if (draft) {
+        this.getUIContext().showAlertDialog({
+          title: '还有一份未完成的草稿', message: '可以继续上次的内容，或舍弃草稿后打开这次记录。',
+          primaryButton: { value: '继续草稿', action: () => { this.editorSeed = draft; this.editor = true; } },
+          secondaryButton: { value: '舍弃并打开', action: () => { this.replaceDraft(seed); } }
+        });
+      } else { this.editorSeed = seed; this.editor = true; }
+    } catch (_) { this.flash('草稿暂时无法读取，已保留原数据，请稍后重试'); }
+  }
+
+  private async replaceDraft(seed: EmotionRecord): Promise<void> {
+    try {
+      if (!this.drafts) throw new Error('No draft store');
+      await this.drafts.clear();
+      this.editorSeed = seed;
+      this.editor = true;
+    } catch (_) { this.flash('草稿未清除成功，请重试'); }
+  }
+
+  private async saveRecord(record: EmotionRecord): Promise<void> {
+    if (!this.repository || !this.storageReady) throw new Error('No record store');
+    await this.repository.upsert(record);
+    this.refreshRecords();
+    this.selectedDate = record.date;
+    this.tab = 3;
+    try { await this.drafts?.clear(); }
+    catch (_) {
       this.editor = false;
-      this.tab = 3;
-      this.flash('已保存在这台设备上');
-    } catch (_) { this.flash('保存未完成，文字仍保留在这里'); }
+      this.flash('记录已保存；草稿未清理，重复保存不会新增记录');
+      return;
+    }
+    this.editor = false;
+    this.flash('已保存在这台设备上');
+    this.showBottleRitual(record.id);
+  }
+
+  private async saveQuickMood(): Promise<void> {
+    if (this.quickSaving || !this.mood) return;
+    this.quickSaving = true;
+    try {
+      if (!this.repository || !this.storageReady) throw new Error('No record store');
+      const record = newJournal('', this.mood);
+      record.kind = 'mood';
+      await this.repository.upsert(record);
+      this.refreshRecords();
+      this.flash('此刻的心情已留下，可在我的记录中查看');
+      this.mood = '';
+    } catch (_) { this.flash('心情未保存成功，请重试'); }
+    finally { this.quickSaving = false; }
+  }
+
+  onBackPress(): boolean {
+    if (this.dataOpen) {
+      if (!this.dataBusy && !this.storageInitializing && !this.maintenanceBlocked) this.dataOpen = false;
+      else this.flash('请等待数据操作完成；未完成时可重试');
+      return true;
+    }
+    if (this.sleepOpen) { this.sleepOpen = false; return true; }
+    if (this.savedRecordId) { if (!this.markingBottle) this.savedRecordId = ''; return true; }
+    if (this.reflectionOpen) { this.flash('请点“暂存离开”保留进度后返回'); return true; }
+    if (this.editor) { this.flash('请点“稍后继续”保存草稿后离开'); return true; }
+    if (this.exercise >= 0) { this.stopTimer(); this.exercise = -1; return true; }
+    if (this.sanctuary) { this.sanctuary = false; return true; }
+    return false;
   }
 
   private deleteNote(id: string): void {
@@ -156,54 +439,25 @@ struct Index {
   }
 
   private async removeNote(id: string): Promise<void> {
-    const next: JournalEntry[] = this.entries.filter((item: JournalEntry) => item.id !== id);
     try {
-      if (!this.storage) return;
-      await this.storage.put('entries', JSON.stringify(next));
-      await this.storage.flush();
-      this.entries = next;
+      if (!this.storageReady || !this.repository) throw new Error('storage');
+      await this.repository.removeById(id);
+      this.refreshRecords();
       this.flash('手记已删除');
-    } catch (_) { this.flash('删除未完成，请重试'); }
-  }
-
-  private async floatBottle(): Promise<void> {
-    if (!this.draft.trim() || this.savingBottle || this.floating) return;
-    this.savingBottle = true;
-    const next: Bottle[] = [{ id: Date.now().toString(), date: this.dateKey(new Date()), mood: this.bottleMood, text: this.draft.trim() }, ...this.bottles];
-    try {
-      if (!this.storage) throw new Error('storage');
-      await this.storage.put('bottles', JSON.stringify(next));
-      await this.storage.flush();
-      this.bottles = next;
-      this.draft = '';
-      this.floating = true;
-      this.floatTimer = setTimeout(() => { this.floating = false; this.flash('已收进你的私人瓶子收藏'); }, 1800);
-    } catch (_) { this.flash('没有保存成功，心事仍留在输入框里'); }
-    finally { this.savingBottle = false; }
-  }
-
-  private deleteBottle(id: string): void {
-    this.getUIContext().showAlertDialog({ title: '删除这只瓶子？', message: '里面的文字也会删除，无法恢复。',
-      primaryButton: { value: '留下', action: () => {} }, secondaryButton: { value: '删除', action: () => { this.removeBottle(id); } } });
-  }
-
-  private async removeBottle(id: string): Promise<void> {
-    const next: Bottle[] = this.bottles.filter((item: Bottle) => item.id !== id);
-    try {
-      if (!this.storage) throw new Error('storage');
-      await this.storage.put('bottles', JSON.stringify(next)); await this.storage.flush(); this.bottles = next;
     } catch (_) { this.flash('删除未完成，请重试'); }
   }
 
   private async recordJoy(title: string): Promise<void> {
     if (this.savingJoy) return;
     const today: string = this.dateKey(new Date());
-    const exists: boolean = this.joys.some((item: Joy) => item.date === today && item.title === title);
-    const next: Joy[] = exists ? this.joys.filter((item: Joy) => !(item.date === today && item.title === title)) : [{ id: Date.now().toString(), date: today, title }, ...this.joys];
+    const existing: Joy | undefined = this.presetJoys.find((item: Joy) => item.date === today && item.title === title);
+    const exists: boolean = existing !== undefined;
     this.savingJoy = true;
     try {
-      if (!this.storage) throw new Error('storage');
-      await this.storage.put('joys', JSON.stringify(next)); await this.storage.flush(); this.joys = next;
+      if (!this.storageReady || !this.repository) throw new Error('storage');
+      if (existing) await this.repository.remove('joy', existing.id);
+      else await this.repository.save('joy', Date.now().toString(), today, '', '', title);
+      this.refreshRecords();
       this.flash(exists ? '已取消这次记录' : '今天的这一点微光，留下了');
     } catch (_) { this.flash('保存未完成，请重试'); }
     finally { this.savingJoy = false; }
@@ -211,462 +465,35 @@ struct Index {
 
   private stopTimer(): void {
     if (this.timer !== -1) { clearInterval(this.timer); this.timer = -1; }
+    this.breathingClock.pause(Date.now());
+    this.seconds = this.breathingClock.seconds(Date.now());
     this.running = false;
+  }
+
+  private selectDuration(value: number): void {
+    this.stopTimer();
+    this.breathingDuration = value;
+    this.breathingClock.select(value);
+    this.seconds = value;
   }
 
   private startExercise(kind: number): void {
     this.stopTimer();
-    this.seconds = 60;
+    this.selectDuration(this.breathingDuration);
     this.step = 0;
     this.exercise = kind;
   }
 
   private toggleBreathing(): void {
     if (this.running) { this.stopTimer(); return; }
-    if (this.seconds === 0) this.seconds = 60;
+    if (!this.foreground) return;
+    this.breathingClock.start(Date.now());
+    this.seconds = this.breathingClock.seconds(Date.now());
     this.running = true;
     this.timer = setInterval(() => {
-      if (this.seconds > 0) this.seconds--;
+      this.seconds = this.breathingClock.seconds(Date.now());
       if (this.seconds === 0) this.stopTimer();
-    }, 1000);
-  }
-
-  @Builder
-  icon(source: Resource, size: number = 22) {
-    Image(source).width(size).height(size).objectFit(ImageFit.Contain)
-  }
-
-  @Builder
-  titleBlock(eyebrow: string, title: string, subtitle: string) {
-    Column({ space: 9 }) {
-      Text(eyebrow).fontSize(11).fontColor(ROSE).letterSpacing(2)
-      Text(title).fontSize(30).fontWeight(FontWeight.Medium).fontColor(INK)
-      Text(subtitle).fontSize(13).fontColor(MUTED).lineHeight(22)
-    }.alignItems(HorizontalAlign.Start).width('100%').margin({ top: 17, bottom: 26 })
-  }
-
-  @Builder
-  section(title: string, caption: string) {
-    Row() {
-      Text(title).fontSize(18).fontWeight(FontWeight.Medium).fontColor(INK)
-      Blank()
-      Text(caption).fontSize(11).fontColor(MUTED)
-    }.width('100%').margin({ top: 26, bottom: 16 })
-  }
-
-  @Builder
-  moodPicker(forNote: boolean = false) {
-    Row() {
-      ForEach(MOODS, (item: string, index: number) => {
-        Column({ space: 9 }) {
-          Text(FACES[index]).fontSize(25).fontColor(ROSE).textAlign(TextAlign.Center)
-            .width(43).height(43).backgroundColor((forNote ? this.noteMood : this.mood) === item ? '#EBCED0' : '#F6EBE5')
-            .borderRadius(22).border({ width: (forNote ? this.noteMood : this.mood) === item ? 1.5 : 0, color: ROSE })
-          Text(item).fontSize(12).fontColor((forNote ? this.noteMood : this.mood) === item ? ROSE : MUTED)
-        }.layoutWeight(1).padding({ top: 3, bottom: 5 })
-        .accessibilityText(item + ((forNote ? this.noteMood : this.mood) === item ? '，已选择' : ''))
-        .onClick(() => { if (forNote) this.noteMood = item; else this.mood = item; })
-      }, (item: string) => item)
-    }.width('100%')
-  }
-
-  @Builder
-  pill(text: string, selected: boolean, action: () => void) {
-    Button(text).fontSize(12).fontWeight(FontWeight.Normal).fontColor(selected ? '#FFFFFF' : MUTED)
-      .backgroundColor(selected ? ROSE : '#F1EAE4').height(36).padding({ left: 15, right: 15 })
-      .borderRadius(18).onClick(action)
-  }
-
-  @Builder
-  mainButton(label: string, action: () => void) {
-    Button(label).width('100%').height(48).fontSize(14).fontWeight(FontWeight.Medium)
-      .fontColor(Color.White).backgroundColor(ROSE).borderRadius(16).onClick(action)
-  }
-
-  @Builder
-  needTile(title: string, subtitle: string, art: Resource, action: () => void) {
-    Column({ space: 7 }) {
-      Image(art).width('100%').height(136).objectFit(ImageFit.Contain)
-      Text(title).fontSize(15).fontWeight(FontWeight.Medium).fontColor(INK)
-      Text(subtitle).fontSize(11).fontColor(MUTED)
-    }.layoutWeight(1).padding({ bottom: 16 }).onClick(action)
-  }
-
-  @Builder
-  needsGarden() {
-    this.section('今天，想怎样照顾自己？', '跟着此刻的需要')
-    Row({ space: 16 }) {
-      this.needTile('我很累，不想说话', '安静待着，也很好', $r('app.media.woman_rest'), () => { this.sanctuary = true; })
-      this.needTile('心里有一点委屈', '让没说出口的话靠岸', $r('app.media.woman_write'), () => { this.tab = 1; this.mode = 0; })
-    }.width('100%')
-    Row({ space: 16 }) {
-      this.needTile('脑子停不下来', '把事情一件件放下', $r('app.media.woman_read'), () => { this.tab = 1; this.mode = 1; })
-      this.needTile('又勉强自己了吗', '练习把自己放在前面', $r('app.media.woman_walk'), () => { this.openEditor('我其实不太愿意的是：\n\n我的需要是：\n\n我可以这样表达拒绝：\n'); })
-    }.width('100%')
-    Row({ space: 16 }) {
-      this.needTile('想舒服一点', '选一件小小的喜欢', $r('app.media.woman_flowers'), () => { this.tab = 2; })
-      this.needTile('今天也辛苦了', '不用给自己打分', $r('app.media.woman_music'), () => { this.openEditor('今天让我辛苦的是：\n\n稍微没那么难受的一刻：\n\n今晚我想先放下：\n'); })
-    }.width('100%')
-  }
-
-  @Builder
-  scenePanel(title: string, subtitle: string, art: Resource, index: number) {
-    Stack({ alignContent: Alignment.BottomStart }) {
-      Image(art).width('100%').height(230).objectFit(ImageFit.Cover)
-      Column({ space: 6 }) {
-        Text(title).fontSize(22).fontColor(INK)
-        Text(subtitle + '  ↗').fontSize(12).fontColor(MUTED)
-      }.padding(16).backgroundColor('#EDFFF9EF').borderRadius(18).margin({ left: 16, bottom: 28 })
-    }.width('100%').borderRadius(26).clip(true).onClick(() => { this.scene = index; this.sanctuary = true; })
-  }
-
-  @Builder
-  ritual(title: string, subtitle: string, art: Resource, color: string) {
-    Column({ space: 7 }) {
-      Image(art).width(95).height(90).objectFit(ImageFit.Contain)
-      Text(title).fontSize(16).fontColor(INK)
-      Text(subtitle).fontSize(11).fontColor(MUTED)
-    }.padding(15).layoutWeight(1).backgroundColor(color).borderRadius({ topLeft: 35, topRight: 15, bottomLeft: 15, bottomRight: 35 })
-      .onClick(() => { this.openEditor(`${title}\n\n${subtitle}\n\n`); })
-  }
-
-  @Builder
-  homePage() {
-    Scroll() {
-      Column() {
-        Row() {
-          Row({ space: 8 }) {
-            this.icon($r('app.media.ic_spark'), 22)
-            Text('知屿').fontSize(21).fontWeight(FontWeight.Medium).fontColor(INK).letterSpacing(3)
-          }
-          Blank()
-          Text(`${new Date().getMonth() + 1}月${new Date().getDate()}日 · 给自己一点时间`).fontSize(11).fontColor(MUTED)
-        }.width('100%').margin({ top: 10, bottom: 26 })
-        Column({ space: 9 }) {
-          Text('留一盏灯，给自己。').fontSize(27).fontWeight(FontWeight.Medium).fontColor(INK)
-          Text('放下「应该」，先照顾此刻的感受。').fontSize(13).fontColor(MUTED)
-        }.alignItems(HorizontalAlign.Start).width('100%').margin({ bottom: 20 })
-        Stack({ alignContent: Alignment.BottomStart }) {
-          Image($r('app.media.window_woman')).width('100%').height(211).objectFit(ImageFit.Cover)
-          Row({ space: 5 }) {
-            Text('✧').fontColor(INK).fontSize(12)
-            Text('今日小屿 · 不必时刻都很坚强').fontColor(INK).fontSize(11)
-          }.padding({ left: 12, right: 12, top: 8, bottom: 8 }).backgroundColor('#EFFFFFF8').borderRadius(12).margin(14)
-        }.width('100%').borderRadius(24).clip(true)
-        this.section('此刻，心里是什么天气？', '选一个最贴近的感受')
-        this.moodPicker()
-        if (this.mood) {
-          Text(`今天的${this.mood}，也可以被好好安放。`).fontSize(12).fontColor(ROSE).margin({ top: 12 })
-        }
-        this.section('属于你的生活角落', '左右滑动，选一处停留')
-        Swiper() {
-          this.scenePanel('暮色花园', '让一天慢慢落幕', $r('app.media.moon_garden'), 1)
-          this.scenePanel('清晨的窗', '把时间留给自己', $r('app.media.morning_garden'), 2)
-          this.scenePanel('窗边独处', '不必回应所有期待', $r('app.media.window_woman'), 0)
-        }.height(230).autoPlay(false).indicator(true).margin({ bottom: 8 })
-        this.needsGarden()
-        this.section('给自己的书写仪式', '不需要每天完成')
-        Row({ space: 12 }) {
-          this.ritual('晨间一页', '今天，我想先照顾…', $r('app.media.woman_flowers'), '#E7EDDF')
-          this.ritual('没寄出的信', '有些话，只写给自己', $r('app.media.woman_write'), '#F0E0E3')
-        }.width('100%')
-        Row({ space: 12 }) {
-          this.ritual('我的小小勇敢', '哪怕只是一句拒绝', $r('app.media.woman_walk'), '#ECE5D8')
-          this.ritual('睡前放一放', '今晚不用想出答案', $r('app.media.woman_rest'), '#E8E2ED')
-        }.width('100%').margin({ top: 12 })
-
-        this.section('给今天的一句温柔', 'A LITTLE REMINDER')
-        Column({ space: 13 }) {
-          Text('“').fontSize(37).fontColor('#BD9381').height(26)
-          Text('你不需要一直表现得很好，\n才值得被认真对待。').fontSize(18).fontColor(INK).lineHeight(31)
-          Row() {
-            Text('允许自己，暂时休息一下。').fontSize(11).fontColor(MUTED)
-            Blank()
-            Button('记下此刻  ↗').fontSize(11).fontColor(ROSE).backgroundColor(Color.Transparent).height(36)
-              .onClick(() => { this.openEditor(); })
-          }.width('100%')
-        }.alignItems(HorizontalAlign.Start).width('100%').padding(21).backgroundColor('#F3EDE3').borderRadius(22)
-        Text('每一种感受，都有被听见的位置。').fontSize(11).fontColor(MUTED).margin({ top: 26, bottom: 16 })
-      }.padding({ left: 24, right: 24, bottom: 16 }).width('100%')
-    }.scrollBar(BarState.Off).layoutWeight(1).width('100%')
-  }
-
-  @Builder
-  companionPage() {
-    Scroll() {
-      Column({ space: 16 }) {
-        this.titleBlock('LET IT REST HERE', '心事，有处安放。', '写给自己，留在这里。今天不用急着释怀。')
-        Row({ space: 16 }) {
-          Image($r('app.media.woman_write')).width(120).height(125).objectFit(ImageFit.Contain)
-          Column({ space: 8 }) {
-            Text('一封信，一只瓶子，\n都装得下此刻的你。').fontSize(19).fontColor(INK).lineHeight(29)
-            Text('你的私人海岸 · 不公开投递').fontSize(11).fontColor(MUTED)
-          }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-        }.width('100%')
-        Stack({ alignContent: Alignment.BottomStart }) {
-          Image($r('app.media.bottle_sea')).width('100%').height(195).objectFit(ImageFit.Cover)
-            .translate({ x: this.floating ? 55 : 0, y: this.floating ? -24 : 0 }).opacity(this.floating ? 0.25 : 1)
-            .animation({ duration: 1600, curve: Curve.EaseInOut })
-          Text(this.floating ? '让心事，轻轻靠岸。' : '私人漂流瓶 · 仅自己可见').fontSize(12).fontColor('#49675E')
-            .padding(12).backgroundColor('#EFFFFFF8').borderRadius(12).margin(16)
-        }.width('100%').backgroundColor('#E8E7ED').borderRadius(25).clip(true)
-        Row({ space: 7 }) {
-          ForEach(this.modes, (label: string, index: number) => {
-            Button(label).fontSize(12).fontWeight(FontWeight.Normal)
-              .fontColor(this.mode === index ? '#FFFFFF' : MUTED)
-              .backgroundColor(this.mode === index ? ROSE : '#F1EAE4')
-              .height(36).padding({ left: 15, right: 15 }).borderRadius(18)
-              .accessibilityText(label + (this.mode === index ? '，已选择' : ''))
-              .onClick(() => { this.mode = index; })
-          })
-        }.width('100%')
-        Column({ space: 15 }) {
-          Text(this.mode === 0 ? '此刻，你最想说的是什么？' : this.mode === 1 ? '先照顾自己的感受，再慢慢梳理。' : '今天，可以为自己做哪一件小事？').fontSize(17).fontColor(INK).lineHeight(26)
-          Text(this.mode === 0 ? '委屈、疲惫、说不清楚，都可以写在这里。' : this.mode === 1 ? '发生了什么？我感到什么？我需要什么？' : '也许是拒绝一次勉强，或允许自己早点休息。').fontSize(12).fontColor(MUTED).lineHeight(22)
-          TextArea({ text: this.draft, placeholder: '把暂时放不下的心事，轻轻写下来…' }).height(160).fontSize(15).fontColor(INK)
-            .backgroundColor('#FFFCF7').maxLength(2000).onChange((value: string) => { this.draft = value; })
-          Row({ space: 5 }) {
-            ForEach(MOODS, (label: string) => {
-              Text(label).fontSize(12).fontColor(this.bottleMood === label ? ROSE : MUTED).padding(8)
-                .backgroundColor(this.bottleMood === label ? '#F0DDDF' : '#F5F1EB').borderRadius(12)
-                .onClick(() => { this.bottleMood = label; })
-            })
-          }.width('100%')
-          Button(this.savingBottle ? '正在收好…' : this.floating ? '心事正在靠岸…' : '装进瓶子，轻轻放漂').width('100%').height(48).fontSize(14)
-            .backgroundColor(ROSE).fontColor(Color.White).enabled(this.draft.trim().length > 0 && !this.savingBottle && !this.floating)
-            .onClick(() => { this.floatBottle(); })
-          Text('放漂后保存在本机收藏，不会发送给其他人。').fontSize(11).fontColor(MUTED).lineHeight(20)
-        }.alignItems(HorizontalAlign.Start).padding(20).backgroundColor('#FFFFFF').borderRadius(24).width('100%')
-        Row({ space: 12 }) {
-          Image($r('app.media.woman_write')).width(92).height(100).objectFit(ImageFit.Contain)
-          Column({ space: 6 }) {
-            Text('给自己的一封信').fontSize(16).fontColor(INK)
-            Text('写给那个总在努力的自己').fontSize(11).fontColor(MUTED)
-          }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-          this.icon($r('app.media.ic_arrow'), 18)
-        }.padding(15).width('100%').backgroundColor('#F0E4E2').borderRadius(22)
-          .onClick(() => { this.openEditor('亲爱的自己：\n\n最近辛苦你的地方是：\n\n我想允许自己：\n'); })
-        Button('拾一份温柔  ✧').fontSize(14).fontColor(ROSE).backgroundColor('#EFE8EF').width('100%').height(46)
-          .onClick(() => { this.warmth = (this.warmth + 1) % this.warmCards.length; })
-        if (this.warmth >= 0) {
-          Column({ space: 10 }) {
-            Text(this.warmCards[this.warmth]).fontSize(17).lineHeight(29).fontColor(INK)
-            Text('知屿文字卡 · 预设内容，并非他人回信').fontSize(10).fontColor(MUTED)
-          }.width('100%').padding(22).backgroundColor('#FFF7E9').borderRadius(22)
-        }
-        Image($r('app.media.bottle_sea')).width('100%').height(95).objectFit(ImageFit.Cover).borderRadius(18)
-        Button(`我的瓶子收藏 · ${this.bottles.length}  ${this.showBottles ? '收起' : '展开'}`).fontSize(14).fontColor(ROSE)
-          .backgroundColor(Color.Transparent).onClick(() => { this.showBottles = !this.showBottles; })
-        if (this.showBottles) {
-          if (this.bottles.length === 0) { Text('海岸很安静，第一只瓶子会在这里等你。').fontSize(12).fontColor(MUTED) }
-          ForEach(this.bottles, (item: Bottle) => {
-            Column({ space: 12 }) {
-              Text(`${item.date}  ·  ${item.mood}`).fontSize(12).fontColor(ROSE)
-              Text(item.text).fontSize(15).fontColor(INK).lineHeight(26).width('100%')
-              Button('删除这只瓶子').fontSize(11).fontColor(MUTED).backgroundColor(Color.Transparent).onClick(() => { this.deleteBottle(item.id); })
-            }.alignItems(HorizontalAlign.Start).width('100%').padding(20).backgroundColor('#FFFFFF').borderRadius(20)
-          }, (item: Bottle) => item.id)
-        }
-      }.width('100%').padding({ left: 24, right: 24, bottom: 28 })
-    }.scrollBar(BarState.Off).layoutWeight(1)
-  }
-
-  @Builder
-  exerciseCard(title: string, subtitle: string, tag: string, color: string, icon: Resource, action: () => void) {
-    Row({ space: 15 }) {
-      Stack() { Circle().width(49).height(49).fill(color); this.icon(icon, 24) }
-      Column({ space: 7 }) {
-        Text(title).fontSize(16).fontWeight(FontWeight.Medium).fontColor(INK)
-        Text(subtitle).fontSize(11).fontColor(MUTED)
-        Text(tag).fontSize(10).fontColor(ROSE)
-      }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-      this.icon($r('app.media.ic_arrow'), 18)
-    }.width('100%').padding(18).backgroundColor('#FFFFFF').borderRadius(20).margin({ bottom: 12 }).onClick(action)
-  }
-
-  @Builder
-  joyCard(title: string, art: Resource) {
-    Column({ space: 9 }) {
-      Image(art).width('100%').height(105).objectFit(ImageFit.Contain)
-      Text(title).fontSize(11).fontColor(INK)
-      Text(this.joys.some((item: Joy) => item.date === this.dateKey(new Date()) && item.title === title) ? '已留下 ✓' : '留下微光 +').fontSize(10).fontColor(ROSE)
-    }.layoutWeight(1).padding(9).backgroundColor('#FFFFFF').borderRadius(20).onClick(() => { this.recordJoy(title); })
-  }
-
-  @Builder
-  soothePage() {
-    Scroll() {
-      Column() {
-        this.titleBlock('A MOMENT FOR YOURSELF', '在片刻花园，歇一会儿。', '不用努力变好，先让此刻舒服一点。')
-        Stack({ alignContent: Alignment.End }) {
-          Image($r('app.media.botanical')).width(150).height(205).opacity(0.8)
-          Column({ space: 13 }) {
-            Text('今日留白  /  01').fontSize(10).fontColor('#61775F').letterSpacing(2)
-            Text('跟着呼吸，\n慢慢回到此刻。').fontSize(25).fontColor(INK).lineHeight(37)
-            Text('一分钟 · 温和呼吸引导').fontSize(11).fontColor('#62715E')
-            Button('开始放松   →').fontSize(12).height(38).backgroundColor('#71856A').fontColor(Color.White)
-              .padding({ left: 18, right: 18 }).onClick(() => { this.startExercise(0); })
-          }.alignItems(HorizontalAlign.Start).width('100%').padding(25)
-        }.width('100%').backgroundColor('#E7ECDD').borderRadius(25).clip(true)
-        this.section('什么都不做，也可以', '你的安静角落')
-        Stack({ alignContent: Alignment.BottomStart }) {
-          Image($r('app.media.window_woman')).width('100%').height(210).objectFit(ImageFit.Cover)
-          Column({ space: 8 }) {
-            Text('窗边，给自己留个位置').fontSize(19).fontColor(INK)
-            Text('进入安静空间  →').fontSize(12).fontColor(ROSE)
-          }.padding(16).backgroundColor('#EFFFFFF4').borderRadius(16).margin(16)
-        }.borderRadius(25).clip(true).onClick(() => { this.sanctuary = true; })
-        Swiper() {
-          this.scenePanel('暮色花园', '今晚，允许自己慢下来', $r('app.media.moon_garden'), 1)
-          this.scenePanel('晨光里的空白', '暂时不安排任何事', $r('app.media.morning_garden'), 2)
-        }.height(230).autoPlay(false).margin({ top: 16 })
-        this.section('今天的一点微光', '做过就留下，不必打卡')
-        Row({ space: 10 }) {
-          this.joyCard('喝杯热饮', $r('app.media.life_tea'))
-          this.joyCard('看看花草', $r('app.media.life_flower'))
-          this.joyCard('写句话给自己', $r('app.media.life_letter'))
-        }.width('100%')
-        Row({ space: 10 }) {
-          this.joyCard('听喜欢的歌', $r('app.media.woman_music'))
-          this.joyCard('出去走走', $r('app.media.woman_walk'))
-          this.joyCard('读几页书', $r('app.media.woman_read'))
-        }.width('100%').margin({ top: 12 })
-        Row({ space: 10 }) {
-          this.joyCard('允许自己休息', $r('app.media.woman_rest'))
-          this.joyCard('照顾一盆花', $r('app.media.woman_flowers'))
-          this.joyCard('写一点心事', $r('app.media.woman_write'))
-        }.width('100%').margin({ top: 12 })
-        Text('点一下记下，再点一次取消。没有完成也没关系。').fontSize(11).fontColor(MUTED).margin({ top: 12 })
-        this.section('找到适合此刻的方式', '由你选择')
-        Row({ space: 9 }) {
-          ForEach(['全部', '身体放松', '静心书写'], (label: string, index: number) => {
-            Button(label).fontSize(12).fontWeight(FontWeight.Normal)
-              .fontColor(this.filter === index ? '#FFFFFF' : MUTED)
-              .backgroundColor(this.filter === index ? ROSE : '#F1EAE4')
-              .height(36).padding({ left: 15, right: 15 }).borderRadius(18)
-              .accessibilityText(label + (this.filter === index ? '，已选择' : ''))
-              .onClick(() => { this.filter = index; })
-          })
-        }.width('100%').margin({ bottom: 20 })
-        if (this.filter !== 2) {
-          this.exerciseCard('给紧绷的自己松松绑', '把注意力，轻轻放回身体', '约 1 分钟 · 感官练习', '#E6EBDF', $r('app.media.ic_leaf'), () => { this.startExercise(1); })
-          this.exerciseCard('跟随呼吸，歇一会儿', '用舒服的节奏，留一小段空白', '1 分钟 · 呼吸引导', '#EDE4D8', $r('app.media.ic_spark'), () => { this.startExercise(0); })
-        }
-        if (this.filter !== 1) {
-          this.exerciseCard('写下暂时放不下的事', '把脑海中的声音，安放在纸上', '不限时 · 自由书写', '#F1DFDD', $r('app.media.ic_book'), () => { this.openEditor('此刻让我放不下的是：\n\n我希望自己得到的支持是：\n'); })
-          this.exerciseCard('给自己的一封短信', '试着对自己，说一句温柔的话', '不限时 · 自我关怀', '#EDE5D6', $r('app.media.ic_chat'), () => { this.openEditor('亲爱的自己：\n\n'); })
-        }
-        Text('随时可以暂停。照顾自己，没有标准答案。').fontSize(11).fontColor(MUTED).textAlign(TextAlign.Center).margin({ top: 15, bottom: 25 })
-      }.padding({ left: 24, right: 24 }).width('100%')
-    }.scrollBar(BarState.Off).layoutWeight(1)
-  }
-
-  @Builder
-  journalPage() {
-    Scroll() {
-      Column() {
-        this.titleBlock('LITTLE PIECES OF YOU', '你的感受，值得留下。', '收藏生活的微光，也安放偶尔的阴天。')
-        Row({ space: 14 }) {
-          Image($r('app.media.woman_read')).width(130).height(145).objectFit(ImageFit.Contain)
-          Column({ space: 10 }) {
-            Text('一页一页，\n都是你走过的日子。').fontSize(21).fontColor(INK).lineHeight(32)
-            Text('不用完整，也不必每天都写。').fontSize(11).fontColor(MUTED)
-          }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-        }.width('100%').margin({ bottom: 22 })
-
-        Column({ space: 10 }) {
-          Text('慢慢回看自己').fontSize(18).fontColor(INK)
-          Text(this.entries.length < 3 ? '记录还不多，先留住此刻，不急着总结规律。' : `你留下了 ${this.entries.length} 篇手记。每一种感受，都是生活的一部分。`).fontSize(13).fontColor(MUTED).lineHeight(23)
-          Text(`珍藏 ${this.bottles.length} 只心事瓶 · 留下 ${this.joys.length} 点生活微光`).fontSize(12).fontColor(ROSE)
-        }.alignItems(HorizontalAlign.Start).width('100%').padding(20).backgroundColor('#EEE8EE').borderRadius(23).margin({ bottom: 20 })
-        Row({ space: 8 }) {
-          this.icon($r('app.media.ic_lock'), 14)
-          Text('手记仅保存在本机 · 你可以随时删除').fontSize(11).fontColor(MUTED)
-        }.width('100%').margin({ bottom: 23 })
-        Row({ space: 9 }) {
-          this.pill('心情日历', this.journalView === 0, () => { this.journalView = 0; })
-          this.pill('全部手记', this.journalView === 1, () => { this.journalView = 1; this.selectedDate = ''; })
-        }.width('100%').margin({ bottom: 14 })
-        TextInput({ text: this.search, placeholder: '找找某个心情，或一句写过的话' }).height(46).backgroundColor('#F1EBE3').fontSize(13)
-          .onChange((value: string) => { this.search = value; this.selectedDate = ''; }).margin({ bottom: 16 })
-        if (this.journalView === 0) {
-          Column({ space: 10 }) {
-            Row() {
-              Button('‹').fontColor(ROSE).backgroundColor(Color.Transparent).onClick(() => { this.monthOffset--; })
-              Blank()
-              Text(this.calendarTitle()).fontSize(17).fontColor(INK)
-              Blank()
-              Button('›').fontColor(ROSE).backgroundColor(Color.Transparent).onClick(() => { this.monthOffset++; })
-            }.width('100%')
-            Row() {
-              ForEach(['日', '一', '二', '三', '四', '五', '六'], (label: string) => { Text(label).fontSize(11).fontColor(MUTED).layoutWeight(1).textAlign(TextAlign.Center) })
-            }.width('100%')
-            ForEach(this.monthRows(), (row: DayItem[]) => {
-              Row({ space: 3 }) {
-                ForEach(row, (day: DayItem) => {
-                  Column({ space: 5 }) {
-                    Text(day.day === 0 ? '' : day.day.toString()).fontSize(14).fontColor(this.selectedDate === day.key && day.day !== 0 ? '#FFFFFF' : INK)
-                    Circle().width(5).height(5).fill(day.key !== '' && this.entries.some((item: JournalEntry) => item.date === day.key) ? '#B38594' : Color.Transparent)
-                  }.height(43).layoutWeight(1).justifyContent(FlexAlign.Center).borderRadius(15)
-                    .backgroundColor(day.key !== '' && this.selectedDate === day.key ? ROSE : Color.Transparent)
-                    .onClick(() => { if (day.key !== '') this.selectedDate = day.key; })
-                })
-              }.width('100%')
-            })
-          }.padding(14).width('100%').backgroundColor('#FFFFFF').borderRadius(24)
-        }
-        Row() {
-          Column({ space: 8 }) {
-            Text('给今天，留下一页。').fontSize(19).fontColor(INK).fontWeight(FontWeight.Medium)
-            Text('一句话也好，不需要写得漂亮。').fontSize(12).fontColor(MUTED)
-          }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-          Button() { this.icon($r('app.media.ic_plus'), 23) }.width(46).height(46).backgroundColor('#FFFFFF').borderRadius(23)
-            .accessibilityText('写一篇新的心情手记').onClick(() => { this.openEditor(); })
-        }.padding(22).backgroundColor('#F0E0DC').borderRadius(23).width('100%').margin({ top: 24 })
-        Row() {
-          Text('心情足迹').fontSize(18).fontWeight(FontWeight.Medium).fontColor(INK)
-          Blank()
-          Button(this.selectedDate === '' ? '查看今天' : '全部手记').fontSize(11).fontColor(ROSE).height(38).backgroundColor(Color.Transparent)
-            .onClick(() => { this.selectedDate = this.selectedDate === '' ? this.dateKey(new Date()) : ''; })
-        }.width('100%').margin({ top: 20, bottom: 9 })
-        if (this.visibleEntries().length === 0) {
-          Column({ space: 13 }) {
-            Image($r('app.media.woman_write')).width(145).height(145)
-            Text(this.search.trim() ? '暂时没有找到匹配的手记' : '这一页，还在等你的故事').fontSize(17).fontColor(INK)
-            Text('这里不用只记录开心。\n普通的一天，也值得被记住。').fontSize(12).fontColor(MUTED).lineHeight(22).textAlign(TextAlign.Center)
-            Button('写下第一句话  ↗').fontSize(12).fontColor(ROSE).backgroundColor(Color.Transparent).onClick(() => { this.openEditor(); })
-          }.width('100%').padding(24).backgroundColor('#FFFFFF').borderRadius(23)
-        }
-        ForEach(this.visibleEntries(), (item: JournalEntry) => {
-          Column({ space: 14 }) {
-            Row() {
-              Text(item.date.replace(/-/g, '.')).fontSize(11).fontColor(MUTED)
-              Blank()
-              Text(item.mood).fontSize(11).fontColor(ROSE).padding({ left: 10, right: 10, top: 5, bottom: 5 }).backgroundColor('#F6E8E5').borderRadius(10)
-            }.width('100%')
-            Text(item.text).fontSize(15).fontColor(INK).lineHeight(27).width('100%')
-            Row() {
-              Button('编辑').fontSize(11).fontColor(ROSE).backgroundColor(Color.Transparent).height(34)
-                .onClick(() => { this.note = item.text; this.noteMood = item.mood; this.editingId = item.id; this.editor = true; })
-              Blank()
-              Button('删除').fontSize(11).fontColor(MUTED).backgroundColor(Color.Transparent).height(34).onClick(() => { this.deleteNote(item.id); })
-            }.width('100%')
-          }.padding(20).backgroundColor('#FFFFFF').borderRadius(21).width('100%').margin({ bottom: 13 })
-        }, (item: JournalEntry) => item.id)
-        this.section('生活里的小小收藏', '最近留下的微光')
-        if (this.joys.length === 0) {
-          Text('散过的步、听过的歌，都可以在舒缓页留下印记。').fontSize(12).fontColor(MUTED).lineHeight(22)
-        }
-        ForEach(this.joys.slice(0, 6), (item: Joy) => {
-          Row({ space: 12 }) {
-            Image($r('app.media.life_flower')).width(44).height(44)
-            Text(item.title).fontSize(14).fontColor(INK).layoutWeight(1)
-            Text(item.date).fontSize(11).fontColor(MUTED)
-          }.width('100%').padding(10).border({ width: { bottom: 1 }, color: '#E8DED6' })
-        }, (item: Joy) => item.id)
-        Text('这是你的故事，不需要与任何人比较。').fontSize(11).fontColor(MUTED).margin({ top: 22, bottom: 30 })
-      }.padding({ left: 24, right: 24 }).width('100%')
-    }.scrollBar(BarState.Off).layoutWeight(1)
+    }, 250);
   }
 
   @Builder
@@ -676,7 +503,7 @@ struct Index {
         Column({ space: 5 }) {
           Stack() {
             if (this.tab === index) { Rect().width(45).height(29).fill('#EEDDD8').radius(13) }
-            this.icon(this.icons[index], 21)
+            icon(this.icons[index], 21)
           }.height(30)
           Text(label).fontSize(10).fontColor(this.tab === index ? ROSE : MUTED).fontWeight(this.tab === index ? FontWeight.Medium : FontWeight.Normal)
         }.layoutWeight(1).padding({ top: 9, bottom: 10 }).onClick(() => { this.tab = index; })
@@ -686,30 +513,8 @@ struct Index {
   }
 
   @Builder
-  editorSheet() {
-    Column({ space: 18 }) {
-      Row() {
-        Text(this.editingId ? '编辑这页心情' : '写给此刻的自己').fontSize(22).fontColor(INK).fontWeight(FontWeight.Medium)
-        Blank()
-        Button('收起').fontSize(12).fontColor(MUTED).backgroundColor(Color.Transparent).onClick(() => {
-          if (this.note.trim()) {
-            this.getUIContext().showAlertDialog({ title: '暂时离开书写？', message: '尚未保存的文字会被舍弃。',
-              primaryButton: { value: '继续写', action: () => {} }, secondaryButton: { value: '舍弃', action: () => { this.editor = false; } } });
-          } else this.editor = false;
-        })
-      }.width('100%')
-      Text('不需要完整，不需要正确，真实就很好。').fontSize(12).fontColor(MUTED).width('100%')
-      this.moodPicker(true)
-      TextArea({ placeholder: '今天发生了什么？\n此刻，最想对自己说的一句话是…', text: this.note })
-        .width('100%').layoutWeight(1).fontSize(16).fontColor(INK).placeholderColor(MUTED).backgroundColor('#FFFFFF').borderRadius(18)
-        .padding(18).maxLength(5000).onChange((value: string) => { this.note = value; })
-      Text(`${this.note.length} / 5000 · 仅保存到本机`).fontSize(11).fontColor(MUTED).width('100%').textAlign(TextAlign.End)
-      this.mainButton('保存这页心情', () => { this.saveNote(); })
-    }.width('100%').height('100%').padding(24).backgroundColor(PAPER)
-  }
-
-  @Builder
   exerciseSheet() {
+    Scroll() {
     Column() {
       Row() {
         Text('给自己一点时间').fontSize(13).fontColor(MUTED)
@@ -719,14 +524,24 @@ struct Index {
       Blank()
       Text(this.exercise === 0 ? '跟着呼吸，回到此刻' : '轻轻地，回到身体').fontSize(25).fontColor(INK)
       Text(this.exercise === 0 ? '保持舒服的节奏，不必勉强跟随。' : '用一点点感官，感受当下的自己。').fontSize(12).fontColor(MUTED).margin({ top: 15 })
+      if (this.exercise === 0) {
+        Row({ space: 12 }) {
+          ForEach([60, 180], (value: number) => {
+            Button(`${value / 60}分钟`).fontColor(this.breathingDuration === value ? Color.White : ROSE)
+              .backgroundColor(this.breathingDuration === value ? ROSE : '#EEE5DC').enabled(!this.running)
+              .onClick(() => { this.selectDuration(value); })
+          })
+        }.margin({ top: 18 })
+        Text('暂停后可切换时长，切换会重新开始').fontSize(10).fontColor(MUTED).margin({ top: 8 })
+      }
       Stack() {
         Circle().width(242).height(242).fill('#E4EADC')
         Circle().width(205).height(205).fill('#D7E1CD')
-          .scale({ x: this.running && (60 - this.seconds) % 10 < 4 ? 1.1 : 0.88, y: this.running && (60 - this.seconds) % 10 < 4 ? 1.1 : 0.88 })
+          .scale({ x: this.running && (this.breathingDuration - this.seconds) % 10 < 4 ? 1.1 : 0.88, y: this.running && (this.breathingDuration - this.seconds) % 10 < 4 ? 1.1 : 0.88 })
           .animation({ duration: 1400, curve: Curve.EaseInOut })
         Column({ space: 12 }) {
-          this.icon($r('app.media.ic_leaf'), 30)
-          Text(this.exercise === 0 ? (this.seconds === 0 ? '谢谢你照顾自己' : !this.running ? '准备好，再开始' : (60 - this.seconds) % 10 < 4 ? '慢慢吸气' : '缓缓呼气') : ['看看周围', '感受支撑', '自然呼吸'][this.step])
+          icon($r('app.media.ic_leaf'), 30)
+          Text(this.exercise === 0 ? (this.seconds === 0 ? '谢谢你照顾自己' : !this.running ? '准备好，再开始' : (this.breathingDuration - this.seconds) % 10 < 4 ? '慢慢吸气' : '缓缓呼气') : ['看看周围', '感受支撑', '自然呼吸'][this.step])
             .fontSize(18).fontColor('#50664E')
           Text(this.exercise === 0 ? `${this.seconds} 秒` : `${this.step + 1} / 3`).fontSize(12).fontColor('#62765F')
         }
@@ -737,12 +552,13 @@ struct Index {
       }
       Blank()
       if (this.exercise === 0) {
-        this.mainButton(this.running ? '暂停一下' : this.seconds === 0 ? '再给自己一分钟' : this.seconds < 60 ? '继续' : '开始一分钟', () => { this.toggleBreathing(); })
+        mainButton(this.running ? '暂停一下' : this.seconds === 0 ? '再练习一次' : this.seconds < this.breathingDuration ? '继续' : `开始${this.breathingDuration / 60}分钟`, () => { this.toggleBreathing(); })
       } else {
-        this.mainButton(this.step < 2 ? '慢慢来，下一步' : '完成，回到舒缓', () => { if (this.step < 2) this.step++; else this.exercise = -1; })
+        mainButton(this.step < 2 ? '慢慢来，下一步' : '完成，回到放松', () => { if (this.step < 2) this.step++; else this.exercise = -1; })
       }
       Text('感到不适时，请停止练习并自然呼吸。').fontSize(11).fontColor(MUTED).margin({ top: 19, bottom: 14 })
-    }.width('100%').height('100%').padding(27).backgroundColor('#F4F5EB')
+    }.width('100%').constraintSize({ minHeight: '100%' }).padding(27).backgroundColor('#F4F5EB')
+    }.width('100%').height('100%').backgroundColor('#F4F5EB').scrollBar(BarState.Off)
   }
 
   @Builder
@@ -758,13 +574,14 @@ struct Index {
           Blank()
           Button(this.night ? '调亮一些' : '柔和一点').fontColor(INK).backgroundColor('#EEFCF9F5').onClick(() => { this.night = !this.night; })
         }.width('100%')
-        Blank()
+        Scroll() {
         Column({ space: 14 }) {
           Text('这里，不用回复任何人。').fontSize(24).fontColor(INK)
-          Text('放松肩膀，找一个舒服的姿势。\n没有任务，也没有倒计时。').fontSize(14).fontColor(MUTED).lineHeight(26).textAlign(TextAlign.Center)
+          Text('放松肩膀，找一个舒服的姿势。\n可以安静待着，也可以选一段声音。').fontSize(14).fontColor(MUTED).lineHeight(26).textAlign(TextAlign.Center)
           Button('想跟着呼吸一会儿').fontColor(ROSE).backgroundColor('#F1E3E4').onClick(() => { this.sanctuary = false; this.startExercise(0); })
-          Text('静谧插画空间 · 无音频播放').fontSize(10).fontColor(MUTED)
-        }.width('100%').padding(24).backgroundColor('#F2FCF9F5').borderRadius(28)
+          AmbientPanel()
+        }.width('100%').padding(18).backgroundColor('#F2FCF9F5').borderRadius(28)
+        }.layoutWeight(1).width('100%').margin({ top: 20 })
       }.width('100%').height('100%').padding(24)
     }.width('100%').height('100%').brightness(this.night ? 0.75 : 1)
   }
@@ -772,15 +589,98 @@ struct Index {
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
       Column() {
-        if (this.tab === 0) { this.homePage() }
-        else if (this.tab === 1) { this.companionPage() }
-        else if (this.tab === 2) { this.soothePage() }
-        else { this.journalPage() }
+        if (!this.storageReady) {
+          Text('记录正在准备；若长时间未显示，请重新打开应用。原数据会保留。')
+            .fontSize(12).fontColor(MUTED).padding(12).width('100%')
+        }
+        if (this.tab === 0) { HomePage({
+          quickSaving: this.quickSaving,
+          saveQuickMood: () => { this.saveQuickMood(); },
+          tab: this.tab,
+          mood: this.mood,
+          entries: this.entries,
+          reflectionPending: this.reflectionPending,
+          resumeReflection: () => { this.resumeReflection(); },
+          editRecord: (id: string) => { this.editRecord(id); },
+          openEditor: (text: string = '') => { this.openEditor(text); }
+        }).layoutWeight(1) }
+        else if (this.tab === 1) { CompanionPage({
+          reflectionPending: this.reflectionPending,
+          startReflection: (id: string) => { this.startReflection(id); },
+          resumeReflection: () => { this.resumeReflection(); },
+          openEditor: (text: string = '') => { this.openEditor(text); },
+          openTemplate: (id: string) => { this.requestEditor(templateRecord(id)); }
+        }).layoutWeight(1) }
+        else if (this.tab === 2) { SoothePage({
+          startSleep: () => { this.sleepOpen = true; },
+          sanctuary: this.sanctuary,
+          scene: this.scene,
+          joys: this.presetJoys,
+          filter: this.filter,
+          openEditor: (text: string = '') => { this.openEditor(text); },
+          startExercise: (kind: number) => { this.startExercise(kind); },
+          openJoy: () => { this.requestEditor(newJoy()); },
+          recordJoy: (title: string) => { this.recordJoy(title); }
+        }).layoutWeight(1) }
+        else { JournalPage({
+          openDataManager: () => { this.openDataManager(); },
+          journalView: this.journalView,
+          search: this.search,
+          monthOffset: this.monthOffset,
+          joys: this.joys,
+          entries: this.entries,
+          selectedDate: this.selectedDate,
+          filesDir: this.filesDir,
+          favoriteBusy: this.favoriteBusy,
+          toggleFavorite: (id: string) => { this.toggleFavorite(id); },
+          openJoy: () => { this.requestEditor(newJoy()); },
+          putInBottle: (id: string) => { this.showBottleRitual(id); },
+          editRecord: (id: string) => { this.editRecord(id); },
+          openEditor: (text: string = '') => { this.openEditor(text); },
+          deleteNote: (id: string) => { this.deleteNote(id); }
+        }).layoutWeight(1) }
         this.navigation()
       }.width('100%').height('100%').backgroundColor(PAPER)
       if (this.sanctuary) { this.sanctuarySheet() }
-      if (this.editor) { this.editorSheet() }
+      if (this.editor) {
+        RecordEditor({ seed: this.editorSeed, drafts: this.drafts, media: this.media, filesDir: this.filesDir,
+          onSave: async (record: EmotionRecord) => { await this.saveRecord(record); },
+          onClose: () => { this.editor = false; } })
+      }
+      if (this.reflectionOpen) {
+        ReflectionFlow({ seed: this.reflectionSeed, drafts: this.reflectionDrafts,
+          onSave: async (record: EmotionRecord) => { await this.saveReflection(record); },
+          onClose: () => { this.reflectionOpen = false; this.refreshReflectionPending(); },
+          onRelax: () => { this.reflectionOpen = false; this.refreshReflectionPending(); this.tab = 2; } })
+      }
       if (this.exercise >= 0) { this.exerciseSheet() }
+      if (this.sleepOpen) {
+        SleepFlow({ onClose: () => { this.sleepOpen = false; },
+          onAmbient: () => { this.sleepOpen = false; this.scene = 1; this.sanctuary = true; } })
+      }
+      if (this.savedRecordId) {
+        Column({ space: 14 }) {
+          Text(this.bottlePlaced ? '这份心事，已经靠岸。' : '记录已保存，想给它一个小仪式吗？').fontSize(20).fontColor(INK)
+          Image($r('app.media.bottle_sea')).width('100%').height(150).objectFit(ImageFit.Cover).borderRadius(20)
+            .translate({ x: this.bottlePlaced ? 15 : 0 }).opacity(this.bottlePlaced ? 0.65 : 1)
+            .animation({ duration: 900, curve: Curve.EaseInOut })
+          Text('私人瓶子关联原记录，不会复制内容，也不会发送给其他人。').fontSize(12).fontColor(MUTED).lineHeight(22)
+          if (!this.bottlePlaced) {
+            Button(this.markingBottle ? '正在收好…' : '装进瓶子，轻轻放漂').width('100%').backgroundColor(ROSE).fontColor(Color.White)
+              .enabled(!this.markingBottle).onClick(() => { this.markBottle(); })
+          }
+          Button(this.bottlePlaced ? '收好，回到记录' : '留在这里就好').fontColor(ROSE).backgroundColor(Color.Transparent)
+            .enabled(!this.markingBottle).onClick(() => { this.savedRecordId = ''; })
+        }.padding(26).width('100%').height('100%').justifyContent(FlexAlign.Center).backgroundColor(PAPER)
+      }
+      if (this.dataOpen) {
+        DataManager({ busy: this.dataBusy || this.storageInitializing, blocked: this.maintenanceBlocked, ready: this.storageReady,
+          message: this.dataMessage, preview: this.backupPreview,
+          onClose: () => { this.clearBackupPreview(); this.dataOpen = false; },
+          onExport: () => { this.exportBackup(); }, onImport: () => { this.chooseBackup(); },
+          onRestore: () => { this.confirmRestore(); }, onCancelPreview: () => { this.clearBackupPreview(); },
+          onErase: () => { this.confirmErase(); }, onRetry: () => { this.retryMaintenance(); } })
+      }
       if (this.notice) {
         Text(this.notice).fontSize(12).fontColor(Color.White).padding(15).backgroundColor('#493E3D').borderRadius(15)
           .margin({ left: 20, right: 20, bottom: 90 }).textAlign(TextAlign.Center)
