@@ -50,7 +50,7 @@ export class BackupFiles implements BackupMedia {
     const bytes: Uint8Array = new util.TextEncoder().encodeInto(raw);
     if (bytes.length > MAX_BACKUP_BYTES) throw new Error('备份超过64MB，未导出');
     const selected: string[] = await new picker.DocumentViewPicker(this.context).save({
-      newFileNames: [`知屿备份-${new Date().toISOString().slice(0, 10)}-${Date.now()}.zhiyu.json`] });
+      newFileNames: [`绪屿备份-${new Date().toISOString().slice(0, 10)}-${Date.now()}.zhiyu.json`] });
     if (selected.length === 0) return false;
     await this.writeFile(selected[0], bytes);
     return true;

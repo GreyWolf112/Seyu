@@ -29,7 +29,7 @@ export struct HomePage {
       Column({ space: 18 }) {
         Row() {
           icon($r('app.media.ic_spark'), 22)
-          Text('知屿').fontSize(21).fontColor(INK).letterSpacing(3).margin({ left: 8 })
+          Text('绪屿').fontSize(21).fontColor(INK).letterSpacing(3).margin({ left: 8 })
           Blank()
           Text(`${new Date().getMonth() + 1}月${new Date().getDate()}日`).fontSize(12).fontColor(MUTED)
         }.width('100%')

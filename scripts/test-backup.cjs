@@ -197,7 +197,7 @@ function nativeFixture() {
   return {files,dirs,opened,options,stats,service:new mod.exports.BackupFiles({filesDir:'/app'})};
 }
 test('native backup I/O handles short reads/writes, unicode and descriptor closure', async () => {
-  const f=nativeFixture(),raw=JSON.stringify({text:'知屿\n🙂'});f.options.save=['document://backup'];
+  const f=nativeFixture(),raw=JSON.stringify({text:'绪屿\n🙂'});f.options.save=['document://backup'];
   assert.equal(await f.service.save(raw),true);assert.equal(f.files.get('document://backup').toString(),raw);
   f.options.select=['document://backup'];assert.equal(await f.service.select(),raw);
   assert.equal(f.opened.size,0);assert.equal(f.stats.closed,2);assert.equal(f.stats.synced,1);

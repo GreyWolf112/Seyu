@@ -167,7 +167,7 @@ struct Index {
       this.pendingBackup = backup;
       this.backupPreview = `备份时间：${new Date(backup.createdAt).toLocaleString()}\n包含 ${backup.document.records.length} 条记录、${backup.photos.length} 张照片\n将新增 ${summary.added} 条记录；${summary.kept} 条同编号记录保留本机版本\n将恢复 ${summary.draftsAdded} 份草稿；${summary.draftsKept} 份已有草稿保留本机版本`;
       this.dataMessage = '校验通过，确认后才会写入本机。';
-    } catch (_) { this.dataMessage = '文件未通过校验，或无法读取。请选择64MB以内的知屿备份；本机数据没有改变。'; }
+    } catch (_) { this.dataMessage = '文件未通过校验，或无法读取。请选择64MB以内的绪屿备份；本机数据没有改变。'; }
     finally { this.dataBusy = false; }
   }
 
