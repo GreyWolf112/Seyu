@@ -5,13 +5,13 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "/Users/Admin/.ohos/config/default_Seyu_w5KeRMaa1uL8T_okqOLIu3FLbys_ifwHt-NE0AT0t-I=.cer",
-          "keyAlias": "debugKey",
-          "keyPassword": "0000001BE1D5E17FB4F2376FB70406C96DB2A76C8659B17B2CDE3B25156309837F8CF877B36DA40CDD61A5",
-          "profile": "/Users/Admin/.ohos/config/default_Seyu_w5KeRMaa1uL8T_okqOLIu3FLbys_ifwHt-NE0AT0t-I=.p7b",
+          "storeFile": "/Users/Admin/Documents/xuyu资料/zhenghshu/xuyu.p12",
+          "storePassword": "00000019A250729CE4B4A7A2DB882D7EE47CF8577356F68AA993E3408C54D4DA7F297553DC7DE8A85F",
+          "keyAlias": "xuyuAlias",
+          "keyPassword": "00000019769DA2B7E1778DA5DCFF02D64B8CAD47FD238E936B5994EE7E6B7B8A93696E54ECD37FE93B",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "/Users/Admin/.ohos/config/default_Seyu_w5KeRMaa1uL8T_okqOLIu3FLbys_ifwHt-NE0AT0t-I=.p12",
-          "storePassword": "0000001BE0B006E046687CB84C61B3EAB58B9E2B26AAF591F2EEC2F9DC9301DAF43464C8E7E0745872DCCF"
+          "profile": "/Users/Admin/Documents/xuyu资料/zhenghshu/xuyuRelease.p7b",
+          "certpath": "/Users/Admin/Documents/xuyu资料/zhenghshu/xuyu1.cer"
         }
       }
     ],
